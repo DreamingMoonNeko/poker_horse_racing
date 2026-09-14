@@ -1,8 +1,8 @@
 # 卡牌对战游戏 · 规则书
 
-- 版本：v0.2
-- 最后更新：2026-09-13
-- 状态：🟡 设计中
+- 版本：v0.3
+- 最后更新：规则已全部落地为代码（见附录 A）
+- 状态：🟢 已实现
 
 ## 0. 修改日志
 
@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | v0.1 | 2026-09-13 | 初版，定义基础流程 |
 | v0.2 | 2026-09-13 | 补齐组合技、连锁、卡牌效果、特殊情况、术语表 |
+| v0.3 | — | 规则落地：附录 A 补全代码对应表；明确「四条优先于四季」的组合技判定优先级 |
 
 ## 1. 概述
 
@@ -216,7 +217,11 @@ def play_card(player, cards):
 #### 组合技判定规则
 
 - 至少满足上述任意一条花色或点数组合
-- 若同时满足多条，按表格从上到下的顺序依次将达成的组合技加入连锁栈
+- 判定优先级（代码规则）：**点数组合优先于花色组合**，即
+  四条 > 三条（点数）> 对子（点数）> 顺子 > 同花 > 同花三条 > 同花对子 > 四季
+  - 其中「四条」必然是四花色各 1 张，与「四季」形状重合，因此**四条优先于四季**，
+    否则一手四条会被误判成四季
+- 一手牌只取优先级最高的一个组合技结算，避免一手同时触发多个组合技造成效果翻倍
 - 组合技的分数与效果见 §6
 
 ### 5.3 连锁
@@ -234,6 +239,8 @@ def play_card(player, cards):
 - 若上一手是组合技，本次连锁也必须是组合技
 - 连锁效果按 LIFO 加入连锁栈（见 §4.4）
 - 连锁不消耗自己的回合，但每回合每人最多连锁 1 次
+- **放弃连锁视为本回合已用掉这次机会**：同一回合内不会再向你重复询问，
+  直到下一回合重置（避免同一回合里被反复打扰）
 
 ## 6. 卡牌效果
 
@@ -290,6 +297,7 @@ def play_card(player, cards):
 
 - 上限：13 张
 - 超出时：END_PHASE 弃至 13 张
+- 弃牌由玩家自己选择（交互式，见 §4.5 与 TODO「手动弃牌」）；未按时响应则由系统代为弃牌
 
 ### 7.3 非法操作处理
 
@@ -300,6 +308,7 @@ def play_card(player, cards):
 | 在错误阶段出牌 | 拒绝，提示正确阶段 |
 | 连锁条件不满足 | 拒绝，不加入连锁栈 |
 | 手牌不足组合技张数 | 拒绝，提示手牌不足 |
+| 弃牌数量不匹配 | 拒绝，提示「请选择 N 张」 |
 
 ### 7.4 死循环防护
 
@@ -333,20 +342,44 @@ def play_card(player, cards):
 
 | 规则章节 | 代码位置 | 说明 |
 | --- | --- | --- |
-| §2.1 卡牌 | enums.py / Card.py | Suit / Rank / Card |
+| §2.1 卡牌 | enums.py / Card.py | Suit / Rank / Card（+ 中文与符号映射表） |
 | §2.2 区域 | enums.py / zones.py | Zone / DrawPile / Field / Hand |
-| §2.3 玩家状态 | Player.py | faction / my_turn / can_chain / score |
-| §3.1 准备 | GameMaster.setup() | 初始化 |
-| §3.3.1 抽牌 | GameMaster.draw_cards() | 抽牌 |
-| §3.3.2 出牌 | GameMaster.play_card() | 【待实现】 |
-| §3.3.3 结束 | GameMaster.next_phase() | 阶段推进 |
-| §4.4 连锁 | GameMaster.chain_stack | 【待实现】 |
-| §5.3 连锁结算 | GameMaster.resolve_chain() | 【待实现】 |
-| §6.1 加分 | Player.score | 【待实现】 |
-| §6.1 打断 | GameMaster.resolve_chain() | 【待实现】 |
-| §7.1 牌库耗尽 | GameMaster.draw_cards() | 【待补边界】 |
+| §2.3 玩家状态 | Player.py | faction / my_turn / can_chain / score / chained_this_turn |
+| §3.1 准备 | GameMaster.setup() | 4 家、52 张、每人 7 张 |
+| §3.2 回合结构 | turn.py / GameMaster.next_turn | TurnRunner 驱动，非阻塞 step() |
+| §3.3.1 抽牌 | GameMaster.begin_turn_draw() | 每回合抽 2 张后自动进入 PLAY_PHASE |
+| §3.3.2 出牌 | GameMaster.play_cards() / validate_play() | 合法性校验统一入口 |
+| §3.3.3 结束 | GameMaster.end_turn() / _run_end_phase() | 清场 → 手牌上限 → 胜负判定 |
+| §4.2 出牌前置条件 | GameMaster.validate_play() | 阶段 / 回合 / 手牌归属 / 重复牌 |
+| §4.4 连锁（LIFO） | GameMaster.chain_stack / resolve_chain() | 列表模拟栈，后进先出 |
+| §4.4 连锁窗口 | turn.py TurnRunner._collect_chains() | 有玩家待输入即暂停，保证顺序一致 |
+| §5.2 组合技判定 | rules.detect_combo() | 9 种组合；四条优先于四季 |
+| §5.2 顺子（A 当 1/14） | rules.is_straight() | 支持 A23 / A2345 |
+| §5.3 连锁条件 | rules.can_chain() / can_chain_detailed() | 花色相同 / 相反 / 点数之和相同 / 更大 |
+| 每回合限 1 次 | Player.chained_this_turn / declined_chain_this_turn | 由 next_turn() 统一重置；放弃连锁也算用过 |
+| §6.1 加分 | GameMaster._build_effects() → ScoreEffect | 自己回合打出阵营花色，每张 +1 分 |
+| §6.1 打断 | rules.is_interrupt() / effects.InterruptEffect | 无效化栈中上一个加分效果 |
+| §6.2 组合技效果 | effects.COMBO_EFFECTS / build_combo_effects() | 抽牌 / 加分 / 四条弃牌 |
+| §7.1 牌库耗尽 | GameMaster._recycle_to_draw_pile() | FIELD（含弃牌）洗回抽牌堆 |
+| §7.2 手牌上限 | GameMaster._run_end_phase() | 超过 13 张弃至 13 张 |
+| §7.3 非法操作 | GameMaster.GameError | 拒绝执行、不消耗资源，界面给出提示 |
+| §7.4 死循环防护 | turn.TurnRunner._collect_chains() | 连锁层数上限 24 层 |
+| §1.2 胜利条件 | GameMaster.check_victory() | 达到目标分数即结束 |
+
+可视化与联机（TODO 1~4）：
+
+| 功能 | 代码位置 | 说明 |
+| --- | --- | --- |
+| 玩家输入（本地 4 人） | controllers/human.py | HumanController 暴露 pending 状态给界面 |
+| 玩家输入（AI 托管） | controllers/ai.py | AIController |
+| 玩家输入（联机 1 人） | net/controller.py | NetworkController 接收 Intent |
+| 图形化 | ui/ 、viewmodel.py | pygame 单窗口四面板，TableView 与渲染分离 |
+| 局域网联机 | net/server.py / net/client.py | 主机权威 + 快照广播 |
+| ACK 锁 | net/acklock.py | 序号 / 累计确认 / 超时重传 / 去重 / 上限 |
 
 ## 10. 附录 B：待办清单（TODO）
+
+完整进度见 [TODO.md](TODO.md)。
 
 ### P0 — 核心规则
 
@@ -370,7 +403,10 @@ def play_card(player, cards):
 
 ### P3 — 扩展
 
-- □ 玩家掉线/超时（§7.5）
+- ☑ 图形化客户端（pygame，本地热座）
+- ☑ 局域网联机 + ACK 锁同步
+- □ 玩家掉线/超时重连（当前掉线转 AI 托管，§7.5）
+- □ 弃牌改为玩家手动选择
 - □ 大小王（§2.1）
 - □ 示例对局
 
